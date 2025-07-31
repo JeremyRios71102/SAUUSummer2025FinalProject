@@ -1,0 +1,221 @@
+---
+services:
+  firefly:
+    image: fireflyiii/core:latest
+    deploy:
+      replicas: 3
+    ports:
+      - 80:8080
+    environment:
+      DB_CONNECTION: mysql
+      DB_HOST: db
+      DB_PORT: 3306
+      DB_DATABASE: firefly
+      DB_USERNAME: ${DB_USER}
+      DB_PASSWORD: ${DB_PASSWORD}
+      APP_KEY: ${APP_KEY}
+    networks:
+      - firefly_network
+  db:
+    image: mysql/mysql-router:8.0
+    networks:
+      - firefly_network
+    depends_on:
+      - db1
+      - db2
+      - db3
+    command: |
+      bash -lc '
+        BOOTSTRAP_PW=$(cat /run/secrets/router_bootstrap_password);
+        mysqlrouter --bootstrap clusterAdmin:${BOOTSTRAP_PW}@db1:3306
+          --directory /workdir --user=mysqlrouter --force &&
+        exec mysqlrouter --directory /workdir --user=mysqlrouter --foreground
+      '
+    secrets:
+      - router_bootstrap_password
+    deploy:
+      placement:
+        constraints:
+          - node.role == manager
+  db1:
+    image: mysql:8.0
+    networks:
+      - firefly_network
+    environment:
+      MYSQL_DATABASE: firefly
+    secrets:
+      - mysql_root_password
+    configs:
+      - source: my1_cnf
+        target: /etc/mysql/conf.d/my.cnf
+    volumes:
+      - mysql-data:/var/lib/mysql
+    deploy:
+      placement:
+        constraints:
+          - node.labels.mysql == 1
+    healthcheck:
+      test:
+        - CMD
+        - mysqladmin
+        - ping
+        - -h
+        - 127.0.0.1
+      interval: 10s
+      timeout: 3s
+      retries: 10
+    command: >
+      bash -lc '
+        echo "[mysqld]" > /etc/mysql/conf.d/root.cnf &&
+        echo "skip-host-cache" >> /etc/mysql/conf.d/root.cnf &&
+        echo "skip-name-resolve" >> /etc/mysql/conf.d/root.cnf &&
+        exec docker-entrypoint.sh mysqld --default-authentication-plugin=mysql_native_password
+      '
+  db2:
+    image: mysql:8.0
+    networks:
+      - firefly_network
+    secrets:
+      - mysql_root_password
+    configs:
+      - source: my2_cnf
+        target: /etc/mysql/conf.d/my.cnf
+    volumes:
+      - mysql-data:/var/lib/mysql
+    deploy:
+      placement:
+        constraints:
+          - node.labels.mysql == 2
+    healthcheck:
+      test:
+        - CMD
+        - mysqladmin
+        - ping
+        - -h
+        - 127.0.0.1
+      interval: 10s
+      timeout: 3s
+      retries: 10
+    command: >
+      bash -lc '
+        echo "[mysqld]" > /etc/mysql/conf.d/root.cnf &&
+        echo "skip-host-cache" >> /etc/mysql/conf.d/root.cnf &&
+        echo "skip-name-resolve" >> /etc/mysql/conf.d/root.cnf &&
+        exec docker-entrypoint.sh mysqld --default-authentication-plugin=mysql_native_password
+      '
+  db3:
+    image: mysql:8.0
+    networks:
+      - firefly_network
+    secrets:
+      - mysql_root_password
+    configs:
+      - source: my3_cnf
+        target: /etc/mysql/conf.d/my.cnf
+    volumes:
+      - mysql-data:/var/lib/mysql
+    deploy:
+      placement:
+        constraints:
+          - node.labels.mysql == 3
+    healthcheck:
+      test:
+        - CMD
+        - mysqladmin
+        - ping
+        - -h
+        - 127.0.0.1
+      interval: 10s
+      timeout: 3s
+      retries: 10
+    command: >
+      bash -lc '
+        echo "[mysqld]" > /etc/mysql/conf.d/root.cnf &&
+        echo "skip-host-cache" >> /etc/mysql/conf.d/root.cnf &&
+        echo "skip-name-resolve" >> /etc/mysql/conf.d/root.cnf &&
+        exec docker-entrypoint.sh mysqld --default-authentication-plugin=mysql_native_password
+      '
+  db-init:
+    image: mysql/mysql-shell:8.0
+    networks:
+      - firefly_network
+    depends_on:
+      - db1
+      - db2
+      - db3
+    secrets:
+      - mysql_root_password
+      - cluster_admin_password
+      - app_db_user
+      - app_db_password
+    configs:
+      - source: cluster_init_sh
+        target: /work/cluster-init.sh
+      - source: cluster_init_js
+        target: /work/cluster-init.js
+    command:
+      - bash
+      - -lc
+      - chmod +x /work/cluster-init.sh && /work/cluster-init.sh
+    deploy:
+      restart_policy:
+        condition: none
+  db-backup:
+    build:
+      context: ./backup
+      dockerfile: Dockerfile
+    networks:
+      - firefly_network
+    depends_on:
+      - db
+    environment:
+      GCS_BUCKET: gs://your-bucket-name/firefly-backups
+      BACKUP_CRON: 0 2 * * *
+      MYSQL_HOST: db
+      MYSQL_DB: firefly
+    secrets:
+      - app_db_user
+      - app_db_password
+      - gcp_sa_key
+    volumes:
+      - /etc/timezone:/etc/timezone:ro
+      - /etc/localtime:/etc/localtime:ro
+    deploy:
+      replicas: 1
+      placement:
+        constraints:
+          - node.role == manager
+networks:
+  firefly_network:
+    driver: overlay
+volumes:
+  mysql-data:
+    driver: local
+    driver_opts:
+      type: none
+      o: bind
+      device: /mnt/mysql
+secrets:
+  mysql_root_password:
+    external: true
+  app_db_user:
+    external: true
+  app_db_password:
+    external: true
+  cluster_admin_password:
+    external: true
+  router_bootstrap_password:
+    external: true
+  gcp_sa_key:
+    external: true
+configs:
+  my1_cnf:
+    file: ./mysql/conf/my1.cnf
+  my2_cnf:
+    file: ./mysql/conf/my2.cnf
+  my3_cnf:
+    file: ./mysql/conf/my3.cnf
+  cluster_init_sh:
+    file: ./mysql/cluster-init.sh
+  cluster_init_js:
+    file: ./mysql/cluster-init.js
