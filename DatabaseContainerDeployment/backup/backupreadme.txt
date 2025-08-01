@@ -1,0 +1,1 @@
+Make sure the backup folder has gsutil, mysqldump, and a cron-driven entrypoint
