@@ -1,0 +1,27 @@
+version: '3.8'
+
+services:
+  app:
+    image: nginx
+    deploy: 
+      replicas: 2
+    networks: 
+        - test
+
+  nginx_load_balance: 
+    image: nginx
+    ports:
+      - "80:80"
+    configs:
+      - source: conf
+        target: /etc/nginx/nginx.conf
+    networks:
+      - test
+
+configs:
+  conf:
+    file: ./nginx.conf
+
+networks:
+  test:
+    driver: overlay
