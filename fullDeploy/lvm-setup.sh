@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Usage: sudo bash lvm-setup.sh /dev/sdb (or sda)
 set -euo pipefail
-DISK="${1:-/dev/sdb}" #change to sda if necessary
+DISK="${1:-/dev/sda}" #change to sda if necessary
 VG_NAME="vgdata"
 LV_NAME="lv_mysql"
 MOUNT="/mnt/mysql"
