@@ -26,7 +26,10 @@ PY
 fi
 
 #The filesystem and mount
-mkfs.ext4 -F -L "$FS_LABEL" "/dev/$VG_NAME/$LV_NAME"
+if ! mount | grep -q "$MOUNT"; then
+	mkfs.ext4 -F -L "$FS_LABEL" "/dev/$VG_NAME/$LV_NAME"
+fi
+
 mkdir -p "$MOUNT"
 grep -q "$FS_LABEL" /etc/fstab || echo "LABEL=$FS_LABEL $MOUNT ext4 defaults,nofail 0 2" >> /etc/fstab
 mount -a
