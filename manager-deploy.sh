@@ -6,8 +6,11 @@ set -e
 echo "Running LVM setup..."
 sudo bash ./fullDeploy/lvm-setup.sh
 
-echo "Sourcing secrets..."
-source ./fullDeploy/secrets.sh
+echo "Checking for Docker..."
+if ! command -v docker >/dev/null 2>&1; then
+  echo "Docker not found. Installing..."
+  curl -fsSL https://get.docker.com | sudo bash
+fi
 
 echo "Initializing Docker Swarm (ignore if already initialized)..."
 docker swarm init || true
