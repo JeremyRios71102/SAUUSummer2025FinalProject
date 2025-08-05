@@ -1,257 +1,244 @@
-# Firefly III – Data‑Management Layer (MySQL InnoDB Cluster)
+# Firefly III Docker Swarm Deployment
 
-> **Purpose**  This README walks you **step‑by‑step** through setting up the high‑availability MySQL back‑end, persistent storage, and automated backups for the Firefly III stack on **Ubuntu 25.04** running **inside Google Cloud Console** (GCE VMs + Cloud Shell) – **console‑only**, no GUI.
+A production-ready Docker Swarm deployment of [Firefly III](https://www.firefly-iii.org/) - a self-hosted personal finance manager.
 
----
+## Overview
 
-## Table of Contents
+This deployment includes:
+- **Firefly III** - Personal finance management application
+- **MySQL** - Database backend
+- **Nginx** - Reverse proxy with load balancing
+- **Docker Swarm** - Orchestration with automatic scaling and healing
 
-1. [Prerequisites](#1-prerequisites)
-2. [Repo / Directory Layout](#2-repo--directory-layout)
-3. [Prepare Your GCE VMs](#3-prepare-your-gce-vms)
+## Prerequisites
 
-    3a. [Install Docker & CLI tools](#31-install-docker--cli-tools)
-    3b. [Initialise Docker Swarm](#32-initialise-docker-swarm)
-    3c. [Label Nodes for DB Placement](#33-label-nodes-for-db-placement)
-4. [Provision Persistent Storage](#4-provision-persistent-storage)
-5. [Create Swarm Secrets](#5-create-swarm-secrets)
-6. [Build the Backup Image](#6-build-the-backup-image)
-7. [Deploy the Stack](#7-deploy-the-stack)
-8. [Validate the Deployment](#8-validate-the-deployment)
-9. [Day‑2 Operations](#9-day‑2-operations)
-10. [Troubleshooting](#10-troubleshooting)
-11. [Cleanup](#11-cleanup)
+- Ubuntu 25.02 (or compatible Linux distribution)
+- Docker Engine with Swarm mode initialized
+- Basic understanding of Docker and terminal commands
 
----
-
-## 1. Prerequisites
-
-| Item                              | Notes                                                                                                                   |
-| --------------------------------- | ----------------------------------------------------------------------------------------------------------------------- |
-| **Google project**                | Billing enabled; Cloud Shell activated.                                                                                 |
-| **3× Ubuntu 25.04 GCE instances** | Static internal names: `db-1`, `db-2`, `db-3`. Each has an *extra* blank disk at **/dev/sdb** (≥20 GiB) for MySQL data. |
-| **Firewall**                      | Allow TCP 3306, 33060–33061 between DB nodes; port 80 (or 8080 ext) to Firefly service.                                 |
-| **Service‑account key JSON**      | Grants write to a GCS bucket for backups; download locally.                                                             |
-| **Bucket**                        | `gs://<your‑bucket>/firefly-backups` already exists.                                                                    |
-
-> **Cloud Shell only?**  You can SSH into each VM directly from Cloud Shell with `gcloud compute ssh db-1` (repeat for others).
-
----
-
-## 2. Repo / Directory Layout
-
-Here's a directory on how the app should be laid out.
+## Project Structure
 
 ```
-DatabaseContainerDeployment/
-├── stack.yml                 # Master compose file (app + DB + backup)
-├── scripts/
-│   └── lvm-setup.sh          # Host‑level persistent volume creator
-├── mysql/
-│   ├── conf/
-│   │   ├── my1.cnf
-│   │   ├── my2.cnf
-│   │   └── my3.cnf
-│   ├── cluster-init.sh       # One‑shot bootstrap shell script
-│   └── cluster-init.js       # JS API calls for MySQL Shell
-└── backup/
-    ├── Dockerfile            # Tiny image with gsutil + mysqldump
-    ├── entrypoint.sh         # Cron runner
-    └── backup.sh             # Actual backup code
+firefly-deployment/
+├── docker-compose.yaml     # Main deployment configuration
+├── nginx/
+│   └── nginx.conf         # Nginx reverse proxy configuration
+├── mysql_root_password.txt # MySQL root password (keep secure!)
+├── db_user_password.txt    # Database user password (keep secure!)
+├── deploy-firefly.sh      # Deployment script
+└── README.md              # This file
 ```
 
-Clone or copy these files onto the **Swarm manager** VM (or Cloud Shell workspace):
+## Quick Start
+
+1. **Initialize Docker Swarm** (if not already done):
+   ```bash
+   docker swarm init
+   ```
+
+2. **Clone or create the project directory**:
+   ```bash
+   mkdir -p DatabaseContainerDeployment/nginx
+   cd DatabaseContainerDeployment
+   ```
+
+3. **Password files**:
+   ```The password files are provided with the directory```
+
+4. **Create configuration files**:
+   - Copy the `docker-compose.yaml` from this repository
+   - Copy the `nginx.conf` to `nginx/nginx.conf`
+
+5. **Deploy Firefly III**:
+   ```sudo docker stack deploy -c docker-compose.yaml firefly```
+
+6. **Insert the MySQL table**:
+  ```Run the following commands to resolve the Firefly no database error```
+   - FIREFLY_CONTAINER=$(sudo docker ps --filter "label=com.docker.swarm.service.name=firefly_firefly" -q | head -1)
+   - sudo docker exec -it $FIREFLY_CONTAINER php artisan cache:table
+   - sudo docker exec -it $FIREFLY_CONTAINER php artisan session:table
+
+7. **Access Firefly III**:
+   - Open your browser to `http://(External IP):80`
+   - Complete the registration process
+
+## Configuration
+
+### Environment Variables
+
+The deployment requires an `APP_KEY` environment variable. The deployment script generates this automatically, but you should save it for future deployments:
 
 ```bash
-# Cloud Shell
-mkdir -p ~/firefly-ha && cd ~/firefly-ha
-# Copy/paste each file or clone from your fork
+# View your APP_KEY
+echo $APP_KEY
+
+# Set it for future sessions
+export APP_KEY="your-saved-app-key"
 ```
 
----
+### Key Configuration Options
 
-## 3. Prepare Your GCE VMs
+| Variable | Description | Default |
+|----------|-------------|---------|
+| `APP_KEY` | Laravel application key (required) | Provided in yaml |
+| `SESSION_DRIVER` | Session storage method | `file` |
+| `CACHE_DRIVER` | Cache storage method | `array` |
+| `TRUSTED_PROXIES` | Proxy configuration | `**` |
+| `APP_URL` | Application URL | `http://localhost` |
 
-### 3.1 Install Docker & CLI tools (run on **each** VM)
+## Database Management
+
+### Check Database Status
 
 ```bash
-sudo apt update && sudo apt install -y \
-    docker.io docker-compose-plugin lvm2 \
-    gnupg2 curl cron
-# Enable & start Docker
-sudo systemctl enable --now docker
-# (Optional) allow your user to run Docker without sudo
-sudo usermod -aG docker $USER
+# Quick database check
+./check_db.sh
+
+# Manual database connection
+MYSQL_CONTAINER=$(docker ps --filter "label=com.docker.swarm.service.name=firefly_mysql" -q)
+docker exec -it $MYSQL_CONTAINER mysql -u firefly -p$(cat db_user_password.txt) firefly
 ```
 
-Log out and sign back in, this should put you in the docker group.
-
-### 3.2 Initialise Docker Swarm (on one **manager** VM)
+### Backup Database
 
 ```bash
-# Replace with the manager's primary NIC private IP
-MY_IP=$(hostname -I | awk '{print $1}')
-docker swarm init --advertise-addr "$MY_IP"
+# Create backup
+MYSQL_CONTAINER=$(docker ps --filter "label=com.docker.swarm.service.name=firefly_mysql" -q)
+docker exec $MYSQL_CONTAINER mysqldump -u firefly -p$(cat db_user_password.txt) firefly > firefly_backup_$(date +%Y%m%d_%H%M%S).sql
 ```
 
-A 'docker swarm join...' command will be shown, copy that command so you can log in.
-
-> **Join the other two nodes** (run on `db-2` & `db-3`):
+### Restore Database
 
 ```bash
-# Example (paste the token printed above)
-sudo docker swarm join --token <token> <manager_ip>:2377
+# Restore from backup
+MYSQL_CONTAINER=$(docker ps --filter "label=com.docker.swarm.service.name=firefly_mysql" -q)
+docker exec -i $MYSQL_CONTAINER mysql -u firefly -p$(cat db_user_password.txt) firefly < firefly_backup.sql
 ```
 
-### 3.3 Label Nodes for DB Placement (manager only)
+## Monitoring
+
+### View Service Status
 
 ```bash
-docker node update --label-add mysql=1 db-1
-docker node update --label-add mysql=2 db-2
-docker node update --label-add mysql=3 db-3
-```
-
----
-
-## 4. Provision Persistent Storage
-
-Copy `scripts/lvm-setup.sh` to each DB node and **run as root**:
-
-```bash
-scp scripts/lvm-setup.sh db-1:~/
-# Change the device name if necessary
-ssh db-1 "sudo bash ~/lvm-setup.sh /dev/sdb"
-```
-
-Result: data directory **/mnt/mysql** exists, formatted, mounted, and permissioned for UID `999` (MySQL).
-
----
-
-## 5. Create Swarm Secrets (manager only)
-
-You may use your own password terms, just make sure they're strong. Below is an example:
-
-```bash
-# 1) Create local files with strong secrets
-printf '%s' 'Str0ngRoot!'           > mysql_root_password.txt
-printf '%s' 'Str0ngApp!'            > app_db_password.txt
-printf '%s' 'firefly_user'          > app_db_user.txt
-printf '%s' 'Str0ngCluster!'        > cluster_admin_password.txt
-printf '%s' 'Str0ngRouter!'         > router_bootstrap_password.txt
-cp ~/Downloads/your-gcp-sa.json gcp_sa_key.json  # service‑account key
-
-# 2) Load them as Swarm secrets
-for s in mysql_root_password app_db_password app_db_user \
-         cluster_admin_password router_bootstrap_password gcp_sa_key; do
-  docker secret create "$s" "${s}.txt"
-done
-```
-
-> **Never** commit these files to git; delete the plain‑text copies once secrets are loaded.
-
----
-
-## 6. Build the Backup Image (manager only)
-
-We keep the image local to the Swarm. From the project root:
-
-```bash
-docker build -t firefly/db-backup:latest ./backup
-```
-
----
-
-## 7. Deploy the Stack
-
-Ensure you are in the `firefly-ha` directory (contains `stack.yml`). Then run:
-
-```bash
-# Create an overlay network if you prefer explicit control (optional)
-# docker network create -d overlay firefly_network
-
-# Deploy everything (app + db + backups)
-docker stack deploy -c stack.yml firefly
-```
-
-Swarm will schedule:
-
-* 3× `db*` MySQL containers (one per labelled node)
-* 1× `db-init` job (runs once, bootstraps cluster, then exits)
-* 1× `db` MySQL Router (load‑balances primary)
-* 3× `firefly` app replicas
-* 1× `db-backup` cron sidecar
-
----
-
-## 8. Validate the Deployment
-
-### 8.1 Check service health
-
-```bash
+# All services
 docker service ls
+
+# Specific service details
+docker service ps firefly_firefly
+docker service ps firefly_mysql
+docker service ps firefly_nginx
+
+# View logs
+docker service logs firefly_firefly --follow
+docker service logs firefly_mysql --tail 50
 ```
 
-You should see all services `Running` with desired replicas.
+### Health Checks
 
-### 8.2 Inspect cluster status
+The deployment includes health checks for automatic recovery:
+- **MySQL**: Checks database connectivity
+- **Firefly**: Checks API endpoint availability
+
+## Troubleshooting
+
+### 419 Page Expired Error
+
+This occurs when session management fails. Solutions:
+1. Clear browser cookies and cache
+2. Ensure `APP_KEY` is set correctly
+3. Check if using multiple replicas without proper session handling
+
+### 500 Internal Server Error
+
+Usually database-related:
+1. Check MySQL is running: `docker service ps firefly_mysql`
+2. Verify database migrations: 
+   ```bash
+   FIREFLY_CONTAINER=$(docker ps --filter "label=com.docker.swarm.service.name=firefly_firefly" -q | head -1)
+   docker exec $FIREFLY_CONTAINER php artisan migrate --force
+   ```
+
+### Container Restart Loops
+
+Check logs for specific errors:
+```bash
+docker service logs firefly_firefly --tail 100
+```
+
+## Maintenance
+
+### Update Firefly III
 
 ```bash
-# Grab the cluster_admin_password secret for convenience
-CLUSTER_PW=$(docker secret inspect cluster_admin_password -f '{{.Spec.Data}}' | base64 -d)
+# Pull latest image
+docker pull fireflyiii/core:latest
 
-docker run --rm --network firefly_firefly_network mysql/mysql-shell:8.0 \
-  --js -u clusterAdmin -p"$CLUSTER_PW" -h db1 \
-  -e "dba.getCluster().status()"
+# Update service
+docker service update --image fireflyiii/core:latest firefly_firefly
 ```
 
-### 8.3 Failover test (optional)
+### Clean Up Old Data
 
 ```bash
-# Stop the current primary (db1) and watch Router keep serving
-docker service scale firefly_db1=0
-# Wait 15–30 s, then re‑run the status command above; primary should switch.
+# Remove unused Docker resources
+docker system prune -a
+
+# Clean application cache
+FIREFLY_CONTAINER=$(docker ps --filter "label=com.docker.swarm.service.name=firefly_firefly" -q | head -1)
+docker exec $FIREFLY_CONTAINER php artisan cache:clear
 ```
 
----
+## Security Considerations
 
-## 9. Day‑2 Operations
+1. **Password Files**: 
+   - Keep `mysql_root_password.txt` and `db_user_password.txt` secure
+   - Never commit these to version control
+   - Use strong, randomly generated passwords
 
-| Task                 | Command                                                                                                          |
-| -------------------- | ---------------------------------------------------------------------------------------------------------------- |
-| **Scale app**        | `docker service scale firefly_firefly=5`                                                                         |
-| **View backup log**  | `docker service logs -f firefly_db-backup`                                                                       |
-| **Restore (quick)**  | `gsutil cp gs://<bucket>/firefly-backups/<dump>.gz .` → `gunzip` → `mysql -h db -u <user> -p firefly < dump.sql` |
-| **Rotate passwords** | `docker secret rm ...` + re‑create → `docker service update --secret-rm/--secret-add`                            |
+2. **Network Security**:
+   - The deployment uses an overlay network for service isolation
+   - Only Nginx port 80 is exposed externally
+   - Consider adding HTTPS with proper certificates for production
 
----
+3. **Backups**:
+   - Regularly backup the MySQL database
+   - Store backups securely and test restoration procedures
 
-## 10. Troubleshooting
+4. **Updates**:
+   - Keep all images updated with security patches
+   - Monitor Firefly III releases for security updates
 
-* `db-init` stuck?  Run `docker service logs firefly_db-init` to see why bootstrap failed (most common: wrong secret values).
-* Router can’t start?  Delete its workdir volume or force‑rebootstrap:
+## Advanced Configuration
 
-  ```bash
-  docker service rm firefly_db
-  # Re‑create once cluster healthy:
-  docker stack deploy -c stack.yml firefly --with-registry-auth
-  ```
-* MySQL node won’t join cluster – check `group_replication` config & ensure ports 33061 open between VMs.
+### Enable HTTPS
 
----
+1. Update `nginx.conf` to include SSL configuration
+2. Mount SSL certificates as configs or secrets
+3. Update port mapping in `docker-compose.yaml`
 
-## 11. Cleanup
+### Use External Database
 
-```bash
-# Remove entire stack (keeps data on /mnt/mysql)
-docker stack rm firefly
-# This will wipe the storage. Be careful, it can't be undone.
-# sudo umount /mnt/mysql && sudo lvremove -f /dev/vgdata/lv_mysql && sudo vgremove -f vgdata && sudo pvremove /dev/sdb
-# Remove secrets
-for s in $(docker secret ls -q); do docker secret rm "$s"; done
+Modify the `docker-compose.yaml` to point to an external MySQL/MariaDB instance:
+```yaml
+environment:
+  DB_HOST: your-external-db-host
+  DB_PORT: 3306
+  DB_DATABASE: firefly
+  DB_USERNAME: firefly
+  DB_PASSWORD: your-password
 ```
 
----
+### Add Redis for Better Performance
 
-### ✨ You’re done!
+See the Redis configuration example in the deployment files for session and cache management with multiple replicas.
 
-Firefly III should now be accessible at the external IP of whichever Swarm node published port 80. Enjoy your resilient, self‑healing, and backed‑up personal finance manager.
+## Support and Resources
+
+- **Firefly III Documentation**: https://docs.firefly-iii.org/
+- **Firefly III GitHub**: https://github.com/firefly-iii/firefly-iii
+- **Docker Swarm Documentation**: https://docs.docker.com/engine/swarm/
+- **Issues**: Check service logs and Firefly III documentation
+
+## License
+
+This deployment configuration is provided as-is. Firefly III is licensed under the AGPL-3.0 License.
