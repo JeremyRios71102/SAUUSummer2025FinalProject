@@ -18,17 +18,20 @@ if ! lvdisplay "/dev/$VG_NAME/$LV_NAME" >/dev/null 2>&1; then
 	FREE=$(vgs --noheadings -o vg_free --units g "$VG_NAME" | tr -dc '0-9.')
 	#Take 90% of free space
 	SIZE=$(python3 - <<PY
-	f=$FREE
-	print(f"{int(f*0.9)}G")
-	PY
+f=$FREE
+print(f"{int(f*0.9)}G")
+PY
 	)
 	lvcreate -L "$SIZE" -n "$LV_NAME" "$VG_NAME"
 fi
 
 #The filesystem and mount
-mkfs.ext4 -F -L "$FS_LABEL" "/dev/$VG_NAME/$LV_NAME"
+if ! mount | grep -q "$MOUNT"; then
+	mkfs.ext4 -F -L "$FS_LABEL" "/dev/$VG_NAME/$LV_NAME"
+fi
+
 mkdir -p "$MOUNT"
-grep -q "$FS_LABEL" /etc/fstab || echo "LABEL=$FS_LABEL $MOUNT ext4 defaults,nofail 0 2" :
+grep -q "$FS_LABEL" /etc/fstab || echo "LABEL=$FS_LABEL $MOUNT ext4 defaults,nofail 0 2" >> /etc/fstab
 mount -a
 
 #Docker requires a mysql-owned dir

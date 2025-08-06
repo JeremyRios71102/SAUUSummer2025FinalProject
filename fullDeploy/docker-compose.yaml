@@ -1,31 +1,21 @@
----
 networks:
   firefly_net:
     driver: overlay
+
 volumes:
   mysql-data: null
   firefly-upload: null
-secrets:
-  mysql_root_password:
-    file: ./mysql_root_password.txt
-  db_user_password:
-    file: ./db_user_password.txt
-configs:
-  nginx_conf:
-    file: ./nginx/nginx.conf
+
 services:
   mysql:
     image: mysql:latest
     environment:
-      MYSQL_ROOT_PASSWORD_FILE: /run/secrets/mysql_root_password
+      MYSQL_ROOT_PASSWORD: <REPLACE>
       MYSQL_DATABASE: firefly
       MYSQL_USER: firefly
-      MYSQL_PASSWORD_FILE: /run/secrets/db_user_password
+      MYSQL_PASSWORD: <REPLACE>
     volumes:
       - mysql-data:/var/lib/mysql
-    secrets:
-      - mysql_root_password
-      - db_user_password
     networks:
       - firefly_net
     deploy:
@@ -35,51 +25,42 @@ services:
       restart_policy:
         condition: on-failure
     healthcheck:
-      test:
-        - CMD
-        - mysqladmin
-        - ping
-        - -h
-        - localhost
+      test: ["CMD", "mysqladmin", "ping", "-h", "localhost"]
       timeout: 20s
       retries: 10
+
   firefly:
     image: fireflyiii/core:latest
     deploy:
       replicas: 3
+      endpoint_mode: dnsrr  # THIS ENABLES MULTIPLE IP RESOLUTION
     environment:
       DB_CONNECTION: mysql
       DB_HOST: mysql
       DB_PORT: 3306
       DB_DATABASE: firefly
       DB_USERNAME: firefly
-      DB_PASSWORD_FILE: /run/secrets/db_user_password
-      APP_KEY: a1b2c3d4e5f6g7h8i9j0k1l2m3n4o5p6
-      SESSION_DRIVER: file
+      DB_PASSWORD: <REPLACE>
+      APP_KEY: base64:Z1VhWkZ2cm9Ia3ZhZ3V4bEZvY2RUM0g2dHZUd0lyMkU=
+      SESSION_DRIVER: database
       CACHE_DRIVER: array
       SESSION_SECURE_COOKIE: 0
       SESSION_LIFETIME: 120
       DB_WAIT_TIMEOUT: 60
-    secrets:
-      - db_user_password
     volumes:
       - firefly-upload:/var/www/html/storage/upload
     networks:
-      firefly_net:
-        aliases:
-          - firefly
+      - firefly_net
     depends_on:
       - mysql
     healthcheck:
-      test:
-        - CMD
-        - curl
-        - -f
-        - http://localhost:8080/api/v1/about
+      test: ["CMD", "curl", "-f", "http://localhost:8080/api/v1/about"]
       interval: 30s
       timeout: 10s
       retries: 5
       start_period: 120s
+
+
   nginx:
     image: nginx:alpine
     configs:
@@ -95,3 +76,7 @@ services:
       replicas: 1
       restart_policy:
         condition: on-failure
+
+configs:
+  nginx_conf:
+    file: ./nginx/nginx.conf
